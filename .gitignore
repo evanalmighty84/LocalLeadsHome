@@ -1,0 +1,6 @@
+node_modules/
+.env
+ftn_debug/
+.DS_Store
+*.log
+
