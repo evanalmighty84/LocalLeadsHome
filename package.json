@@ -8,7 +8,7 @@
     "npm": "10.x"
   },
   "scripts": {
-    "start": "node runFamilyTreeRailwayAutomation.js",
+    "start": "node runFamilyTreeTerminalAutomation.js",
     "test": "node runFamilyTreeStealth.js",
     "postinstall": "npx playwright install chromium"
   },
@@ -18,12 +18,19 @@
     "cheerio": "^1.1.2",
     "cloudinary": "^2.5.0",
     "dotenv": "^16.6.1",
+    "gologin": "^2.1.33",
+    "http-proxy-agent": "^7.0.2",
     "https-proxy-agent": "^7.0.6",
     "imap-simple": "^5.1.0",
     "mailparser": "^3.7.5",
+    "node-fetch": "^3.3.2",
     "openai": "^5.15.0",
     "pg": "^8.13.0",
     "playwright": "^1.53.1",
+    "puppeteer": "^24.26.1",
+    "puppeteer-core": "^24.26.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
     "streamifier": "^0.1.1"
   }
 }

@@ -59,8 +59,8 @@ CMD bash -c '\
   mkdir -p /app/ftn_debug && chmod 777 /app/ftn_debug && \
   if command -v xvfb-run >/dev/null 2>&1; then \
     echo "🖥️  Starting with xvfb-run (virtual display)..."; \
-    xvfb-run -a node runFamilyTreeRailwayAutomation.js; \
+    xvfb-run -a node runFamilyTreeTerminalAutomation.js; \
   else \
     echo "⚙️  xvfb not available — running headless mode."; \
-    HEADLESS=1 node runFamilyTreeRailwayAutomation.js; \
+    HEADLESS=1 node runFamilyTreeTerminalAutomation.js; \
   fi'

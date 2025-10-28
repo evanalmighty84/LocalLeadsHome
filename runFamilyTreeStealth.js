@@ -1,346 +1,202 @@
-// runFamilyTreeStealth.js
-require("dotenv").config();
-const fs = require("fs");
-const path = require("path");
-const axios = require("axios");
-const cheerio = require("cheerio");
-const { chromium } = require("playwright");
-const { HttpsProxyAgent } = require("https-proxy-agent");
+// runFTNPhones.js
+require('dotenv').config();
+const fs = require('fs');
+const path = require('path');
+const { chromium } = require('playwright');
 
-const LOG_DIR = path.resolve(process.cwd(), "ftn_debug");
-fs.mkdirSync(LOG_DIR, { recursive: true });
+const LOG_DIR = path.resolve(process.cwd(), 'ftn_debug');
+if (!fs.existsSync(LOG_DIR)) fs.mkdirSync(LOG_DIR, { recursive: true });
 
-const UA =
-    process.env.USER_AGENT ||
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36";
-// --- Utility: dismiss cookie banner if present ---
+const UA = process.env.USER_AGENT || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
+
 async function dismissCookiePopup(page) {
     try {
-        // Check for any of the known FamilyTreeNow cookie selectors
         const popup = await page.$('div[role="dialog"], div#onetrust-banner-sdk, div:has-text("Essential")');
-        if (popup) {
-            console.log("🍪 Cookie popup detected — attempting to dismiss...");
-
-            // Try clicking the accept or close buttons
-            const buttons = [
-                'button:has-text("Accept All")',
-                'button:has-text("Accept")',
-                'button:has-text("OK")',
-                'button:has-text("Continue")',
-                'button:has-text("Close")',
-                'button[aria-label="Close"]',
-            ];
-
-            for (const sel of buttons) {
-                const btn = page.locator(sel).first();
-                if (await btn.count()) {
-                    await btn.click({ delay: 150 });
-                    console.log(`✅ Dismissed cookie popup via selector: ${sel}`);
-                    await page.waitForTimeout(1000);
-                    return true;
-                }
-            }
-
-            // Fallback: press Escape if modal still visible
-            await page.keyboard.press("Escape").catch(() => {});
-            console.log("⚙️  Sent ESC to close any modal overlays.");
-        }
-    } catch (err) {
-        console.warn("⚠️ Cookie popup dismiss failed:", err.message);
-    }
-    return false;
-}
-// --- Utility: handle Cloudflare Turnstile (captcha) ---
-async function handleTurnstile(page) {
-    try {
-        // Look for the iframe Cloudflare uses
-        const turnstile = await page.$('iframe[src*="challenges.cloudflare.com"]');
-        if (!turnstile) return false;
-
-        console.log("🧩 Cloudflare Turnstile challenge detected — trying to solve...");
-
-        // Option 1: manual wait (if you want to solve visually)
-        // await page.waitForTimeout(20000);  // give yourself 20 s to click
-
-        // Option 2: automated solve via 2Captcha (if API key set)
-        const sitekey = await page.evaluate(() => {
-            const ifr = document.querySelector('iframe[src*="challenges.cloudflare.com"]');
-            return ifr ? new URLSearchParams(ifr.src).get("k") : null;
-        });
-
-        if (sitekey && process.env.TWOCAPTCHA_API_KEY) {
-            const apiKey = process.env.TWOCAPTCHA_API_KEY;
-            const url = page.url();
-            console.log("🔑 Solving Turnstile via 2Captcha...");
-            const res = await fetch(
-                `http://2captcha.com/in.php?key=${apiKey}&method=turnstile&sitekey=${sitekey}&pageurl=${encodeURIComponent(
-                    url
-                )}&json=1`
-            );
-            const { request: captchaId } = await res.json();
-            let token = null;
-            for (let i = 0; i < 20; i++) {
-                await new Promise((r) => setTimeout(r, 5000));
-                const poll = await fetch(
-                    `http://2captcha.com/res.php?key=${apiKey}&action=get&id=${captchaId}&json=1`
-                );
-                const json = await poll.json();
-                if (json.status === 1) {
-                    token = json.request;
-                    break;
-                }
-            }
-            if (token) {
-                await page.evaluate((tk) => {
-                    const cfcb = document.querySelector('input[name="cf-turnstile-response"]');
-                    if (cfcb) cfcb.value = tk;
-                    const form = cfcb?.closest("form");
-                    if (form) form.submit();
-                }, token);
-                console.log("✅ Turnstile token submitted.");
-                await page.waitForLoadState("domcontentloaded", { timeout: 30000 });
+        if (!popup) return false;
+        const buttons = [
+            'button:has-text("Accept All")',
+            'button:has-text("Accept")',
+            'button:has-text("I Accept")',
+            'button:has-text("OK")',
+            'button:has-text("Continue")',
+            'button:has-text("Close")',
+            'button[aria-label="Close"]'
+        ];
+        for (const sel of buttons) {
+            const btn = page.locator(sel).first();
+            if (await btn.count()) {
+                await btn.click({ delay: 150 }).catch(()=>{});
+                await page.waitForTimeout(800);
                 return true;
             }
         }
-
-        console.warn("⚠️ Unable to auto-solve Turnstile; waiting 30 s for manual solve.");
-        await page.waitForTimeout(30000);
-    } catch (err) {
-        console.warn("handleTurnstile() failed:", err.message);
+        await page.keyboard.press('Escape').catch(()=>{});
+    } catch (e) {
+        console.warn('dismissCookiePopup error:', e.message);
     }
     return false;
 }
-// ============================================================================
-// 1️⃣  PICK & OPEN DETAIL
-// ============================================================================
+
+async function waitForTurnstileSolve(page, timeoutMs = 120000) {
+    // detect common cloudflare/turnstile indicators and wait for them to disappear
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        const html = await page.content();
+        const lowered = html.toLowerCase();
+        if (!(/turnstile|challenges.cloudflare.com|please enable javascript|verifying your browser|checking your browser/i.test(lowered))) {
+            return true; // no challenge detected
+        }
+        console.log('🧩 Turnstile/CF challenge detected — please solve in the browser window (waiting)...');
+        await page.waitForTimeout(3000);
+    }
+    return false;
+}
+
 async function pickAndOpenDetail(page) {
-    try {
-
-        console.log('🔎 Looking for "View Details" link...');
-        await dismissCookiePopup(page);
-        await handleTurnstile(page);  // 👈 new
-
-
-        const detailSelectors = [
-            'a:has-text("View Details")',
-            'button:has-text("View Details")',
-            'a[href*="/record/"]',
-            'a[href*="rid="]'
-        ];
-
-        let clicked = false;
-        let href = null;
-
-        for (const sel of detailSelectors) {
-            const el = page.locator(sel).first();
-            if (await el.count()) {
-                href = await el.getAttribute("href");
-                console.log(`➡️ Found detail link (${sel}): ${href || "no href"}`);
-
-                if (href && !href.startsWith("http")) {
-                    const base = new URL(page.url());
-                    href = base.origin + href;
-                }
-
-                try {
-                    await el.scrollIntoViewIfNeeded();
-                    await el.click({ delay: 200 });
-                    clicked = true;
-                    break;
-                } catch (clickErr) {
-                    console.warn(`⚠️ Click failed for ${sel}: ${clickErr.message}`);
-                }
+    // Tries a few selectors to find a "View Details" / record link and click
+    const selectors = [
+        'a:has-text("View Details")',
+        'button:has-text("View Details")',
+        'a[href*="/record/"]',
+        'a[href*="rid="]',
+        'a:has-text("View Detail")',
+        'a.result-link'
+    ];
+    for (const sel of selectors) {
+        const el = page.locator(sel).first();
+        if (await el.count()) {
+            try {
+                const href = await el.getAttribute('href');
+                console.log('➡️ Clicking selector', sel, 'href=', href ? href : '(no href)');
+                await el.scrollIntoViewIfNeeded();
+                await el.click({ delay: 150 });
+                await page.waitForTimeout(2000);
+                return true;
+            } catch (e) {
+                console.warn('click failed for', sel, e.message);
             }
         }
-
-        if (!clicked && href) {
-            console.log("🌐 Navigating directly to record URL:", href);
-            await page.goto(href, { waitUntil: "domcontentloaded", timeout: 30000 });
-            clicked = true;
-        }
-
-        if (!clicked) {
-            console.warn("⚠️ Could not find or click any detail link.");
-            return false;
-        }
-
-        await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => {});
-        await page.waitForTimeout(2500);
-
-        const isDetail = await page.evaluate(() => {
-            const txt = document.body?.innerText || "";
-            return /Possible Primary Phone|Current Address|Public Records|Phone Type/i.test(txt);
-        });
-
-        if (isDetail) {
-            console.log("✅ Reached detail page successfully!");
-            return true;
-        }
-
-        console.warn("⚠️ Clicked but no detail page detected — maybe Cloudflare intervened.");
-        return false;
-    } catch (err) {
-        console.error("pickAndOpenDetail() failed:", err.message);
-        return false;
     }
+    // fallback: click first anchor that looks like a record link
+    const record = await page.$('a[href*="/record/"], a[href*="rid="]');
+    if (record) {
+        try {
+            await record.click({ delay: 150 });
+            await page.waitForTimeout(1500);
+            return true;
+        } catch (e) {}
+    }
+    return false;
 }
 
-// ============================================================================
-// 2️⃣  SCRAPE WIRELESS DETAIL
-// ============================================================================
-async function scrapeWirelessDetail(page) {
-    const out = { mobile_phones: [], phones: [], address: null };
-
+async function scrapeMobilePhones(page) {
+    // returns array of { number, type, carrier, raw }
     try {
-        const entries = await page.$$eval(".panel-body .col-xs-12.col-md-6", (nodes) =>
-            nodes.map((el) => {
-                const text = el.innerText.trim();
-                const numAnchor = el.querySelector('a[href*="phoneno="]');
-                const number = numAnchor ? numAnchor.innerText.trim() : null;
-                if (!number) return null;
-
-                const typeMatch = text.match(/\b(Wireless|Landline|Voip)\b/i);
-                const type = typeMatch ? typeMatch[1].toLowerCase() : "unknown";
-                const lastReported = (text.match(/Last reported\s+([A-Za-z]+\s+\d{4})/) || [])[1] || null;
-                const carrier = (text.match(/\b(AT&T|Verizon|T-Mobile|Sprint|Metro|Cricket|Frontier|Southwestern Bell|Time Warner Cable)\b/i) || [])[0] || null;
-                const isPrimary = /Possible Primary Phone/i.test(text);
-
-                return { number, type, carrier, lastReported, isPrimary, raw: text };
-            }).filter(Boolean)
+        const phones = await page.$$eval('a[href*="phoneno="]', anchors =>
+            anchors.map(a => {
+                const raw = a.closest ? a.closest('div')?.innerText || a.parentElement?.innerText || a.innerText : a.innerText;
+                const number = a.innerText.trim();
+                // find type keywords in surrounding text
+                const txt = (a.closest ? a.closest('div')?.innerText : a.parentElement?.innerText) || '';
+                const typeMatch = txt.match(/\b(Wireless|Mobile|Cell|Landline|Voip|Land Line|Land-Line)\b/i);
+                const type = typeMatch ? typeMatch[1].toLowerCase() : null;
+                // try carrier
+                const carrierMatch = txt.match(/\b(AT&T|Verizon|T-Mobile|Sprint|Metro|Cricket|Frontier|CenturyLink|Charter|Xfinity)\b/i);
+                const carrier = carrierMatch ? carrierMatch[0] : null;
+                return { number, type, carrier, raw: txt.trim().slice(0, 400) };
+            })
         );
 
-        for (const r of entries) {
-            if (r.type === "wireless") out.mobile_phones.push(r);
-            else out.phones.push(r);
-        }
-
-        const addrText = await page.evaluate(() => {
-            const panel = Array.from(document.querySelectorAll(".panel.panel-primary"))
-                .find((p) => p.querySelector(".panel-heading")?.innerText?.match(/Current Address/i));
-
-            if (!panel) return null;
-            const link = panel.querySelector("a.linked-record");
-            if (!link) return null;
-
-            return link.innerText.replace(/\s*\n\s*/g, " ").replace(/\s+/g, " ").trim();
-        });
-
-        if (addrText) {
-            out.address = addrText;
-            console.log("🏠 Detected address:", addrText);
-        } else {
-            console.log("⚠️ No address found on page.");
-        }
-
-        console.log("📞 Parsed phone records:", out);
+        // filter mobile/wireless first; if none, return all phones
+        const mobile = phones.filter(p => p.type && /wireless|mobile|cell/i.test(p.type));
+        return mobile.length ? mobile : phones;
     } catch (e) {
-        console.warn("scrapeWirelessDetail failed:", e.message);
-    }
-
-    return out;
-}
-
-// ============================================================================
-// 3️⃣  WEB UNBLOCKER FETCH (Axios)
-// ============================================================================
-async function fetchViaWebUnblocker(url) {
-    console.log("🌐 Using Web Unblocker for initial fetch...");
-
-    const proxy = `http://${process.env.WEBUNBLOCKER_USER}:${process.env.WEBUNBLOCKER_PASS}@${process.env.WEBUNBLOCKER_HOST || "unblock.oxylabs.io"}:${process.env.WEBUNBLOCKER_PORT || 60000}`;
-
-    try {
-        const res = await axios.get(url, {
-            proxy: false,
-            httpsAgent: new HttpsProxyAgent(proxy),
-            headers: { "User-Agent": UA, Accept: "text/html,application/xhtml+xml" },
-            timeout: 45000,
-        });
-        console.log("✅ Web Unblocker responded, HTML length:", res.data.length);
-        return res.data;
-    } catch (err) {
-        console.error("❌ Web Unblocker fetch failed:", err.message);
-        return null;
+        console.warn('scrapeMobilePhones error:', e.message);
+        return [];
     }
 }
 
-// ============================================================================
-// 4️⃣  MAIN FUNCTION
-// ============================================================================
-async function runFamilyTreeStealth({ first = "", last = "", city = "Riverside" } = {}) {
+async function run({ first='Jennifer', last='Brown', city='Los Angeles' } = {}) {
     if (!first || !last || !city) {
-        console.error("❌ Missing required params.");
-        return { ok: false, reason: "missing_params" };
+        console.error('Missing params');
+        return;
     }
 
-    const target = `https://www.familytreenow.com/search/genealogy/results?first=${encodeURIComponent(
-        first
-    )}&last=${encodeURIComponent(last)}&citystatezip=${encodeURIComponent(city)},+CA`;
+    const target = `https://www.familytreenow.com/search/genealogy/results?first=${encodeURIComponent(first)}&last=${encodeURIComponent(last)}&citystatezip=${encodeURIComponent(city)},+CA`;
+    console.log('🎯 Target:', target);
 
-    console.log(`🎯 Target: ${target}`);
-
-    const html = await fetchViaWebUnblocker(target);
-
-    // Try parse without browser
-    if (html && !/Loading content, please wait|Captcha|enable JS/i.test(html)) {
-        const $ = cheerio.load(html);
-        const firstDetail = $('a[href*="/record/"], a[href*="rid="]').first().attr("href");
-        if (firstDetail) {
-            console.log("➡️ Found View Details link:", firstDetail);
-        }
-        return { ok: true, via: "webunblocker", data: { summary: "HTML fetched, detail link maybe found" } };
-    }
-
-    // Otherwise use Playwright
-    console.log("⚠️ Falling back to Playwright Chrome...");
-    const proxyForPlaywright = {
-        server: `http://${process.env.WEBUNBLOCKER_HOST || "unblock.oxylabs.io"}:${process.env.WEBUNBLOCKER_PORT || 60000}`,
-        username: process.env.WEBUNBLOCKER_USER,
-        password: process.env.WEBUNBLOCKER_PASS,
-    };
-
+    // Playwright launch options (visible)
+    const proxyServer = process.env.USE_PROXY && process.env.PROXY_SERVER ? process.env.PROXY_SERVER : null;
     const launchOpts = {
         headless: false,
-        proxy: proxyForPlaywright,
         args: [
-            "--no-sandbox",
-            "--disable-blink-features=AutomationControlled",
-            "--window-size=1366,768",
-            "--ignore-certificate-errors",
-        ],
+            '--no-sandbox',
+            '--disable-blink-features=AutomationControlled',
+            '--window-size=1366,768',
+        ]
     };
-    if (process.env.USE_CHROME === "1") launchOpts.channel = "chrome";
+    if (proxyServer) {
+        launchOpts.proxy = { server: proxyServer };
+        console.log('🔧 Using browser proxy:', proxyServer.replace(/:[^@]+@/, ':****@'));
+    }
 
     const browser = await chromium.launch(launchOpts);
-    const context = await browser.newContext({ viewport: { width: 1366, height: 768 } });
+    const context = await browser.newContext({ userAgent: UA, viewport: { width: 1366, height: 768 } });
     const page = await context.newPage();
 
     try {
-        await page.goto(target, { waitUntil: "domcontentloaded", timeout: 60000 });
-        await page.waitForTimeout(5000);
+        await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 }).catch(()=>{});
+        await page.waitForTimeout(2500);
 
-        const opened = await pickAndOpenDetail(page);
-        let result;
-        if (opened) {
-            await page.waitForTimeout(3000);
-            result = await scrapeWirelessDetail(page);
-        } else {
-            console.warn("⚠️ Could not open detail page — fallback basic scrape.");
-            result = { mobile_phones: [], phones: [], address: null };
+        // dismiss cookie if present
+        await dismissCookiePopup(page);
+
+        // if Turnstile/CF present, ask user to solve (visible)
+        const noChallenge = await waitForTurnstileSolve(page, 60000);
+        if (!noChallenge) {
+            console.warn('⚠️ Still seeing a JS challenge after wait. You may need to solve it in the opened browser window.');
+            // give additional interactive time
+            await page.waitForTimeout(45000);
         }
 
+        // Try to open detail
+        const opened = await pickAndOpenDetail(page);
+        if (!opened) {
+            console.warn('⚠️ Could not find or click a detail link on results page. Saving results HTML for inspection.');
+            const html = await page.content();
+            fs.writeFileSync(path.join(LOG_DIR, 'ftn_search_page.html'), html);
+            await browser.close();
+            return { ok: false, reason: 'no_detail_link', debug: path.join(LOG_DIR, 'ftn_search_page.html') };
+        }
+
+        // Wait for detail to load
+        await page.waitForLoadState('domcontentloaded', { timeout: 20000 }).catch(()=>{});
+        await page.waitForTimeout(2000);
+
+        // If still a challenge on detail, wait for manual solve
+        await waitForTurnstileSolve(page, 60000);
+
+        // Scrape phones
+        const mobilePhones = await scrapeMobilePhones(page);
+
+        // save detail html for debugging
+        const detailHtml = await page.content();
+        fs.writeFileSync(path.join(LOG_DIR, `ftn_detail_${first}_${last}.html`), detailHtml);
+
+        console.log('📞 Mobile phones found:', mobilePhones);
         await browser.close();
-        return { ok: true, via: "playwright", data: result };
+        return { ok: true, data: mobilePhones };
     } catch (err) {
-        console.error("❌ Error:", err.message);
-        await browser.close();
+        console.error('❌ Error during run:', err.message);
+        try { await browser.close(); } catch(_) {}
         return { ok: false, error: err.message };
     }
 }
 
-module.exports = { runFamilyTreeStealth };
-
+// If run directly
 if (require.main === module) {
-    runFamilyTreeStealth({ first: "Jennifer", last: "Brown", city: "Los Angeles" })
-        .then((r) => console.log("✅ FamilyTreeNow result:", r))
-        .catch((e) => console.error("❌", e));
+    // change these as needed
+    run({ first: 'Amanda', last: 'Terrell', city: 'Los Angeles' })
+        .then(r => console.log('Done:', r))
+        .catch(e => console.error(e));
 }
