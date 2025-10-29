@@ -1,0 +1,31 @@
+{
+  "name": "Manuel Rosales",
+  "city": "Loma Linda",
+  "phones": [
+    {
+      "number": "(559) 930-4354",
+      "href": "https://www.familytreenow.com/search/people/results?phoneno=5599304354",
+      "type": "Wireless"
+    },
+    {
+      "number": "(559) 298-0239",
+      "href": "https://www.familytreenow.com/search/people/results?phoneno=5592980239",
+      "type": "Landline"
+    },
+    {
+      "number": "(559) 779-2039",
+      "href": "https://www.familytreenow.com/search/people/results?phoneno=5597792039",
+      "type": "Wireless"
+    },
+    {
+      "number": "(559) 326-0553",
+      "href": "https://www.familytreenow.com/search/people/results?phoneno=5593260553",
+      "type": "Landline"
+    },
+    {
+      "number": "(209) 298-0239",
+      "href": "https://www.familytreenow.com/search/people/results?phoneno=2092980239",
+      "type": "Wireless"
+    }
+  ]
+}
